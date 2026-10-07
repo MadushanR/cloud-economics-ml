@@ -4,6 +4,8 @@ import textwrap
 from pathlib import Path
 
 cells = []
+SELECTION_CODE = 'def select_linear_fit(X, y):\n    """Choose linear-fit settings using only training-fold validation prices."""\n    candidates = []\n    folds = list(KFold(n_splits=min(5, len(X)), shuffle=True, random_state=42).split(X))\n    for intercept in [True, False]:\n        for power in [0, 1, 2]:\n            errors = []\n            for train_idx, valid_idx in folds:\n                fold_X, fold_y = X.iloc[train_idx], y.iloc[train_idx]\n                q1, q3 = fold_y.quantile([0.25, 0.75])\n                keep = fold_y.between(q1 - 1.5 * (q3 - q1), q3 + 1.5 * (q3 - q1))\n                fold_X, fold_y = fold_X.loc[keep], fold_y.loc[keep]\n                weights = (fold_y.median() / fold_y) ** power\n                model = LinearRegression(positive=True, fit_intercept=intercept)\n                model.fit(fold_X, fold_y, sample_weight=weights)\n                predicted = model.predict(X.iloc[valid_idx])\n                errors.extend(np.abs(predicted - y.iloc[valid_idx]) / y.iloc[valid_idx])\n            candidates.append({"Fit intercept": intercept, "Weight power": power,\n                               "CV mean absolute percentage error": float(np.mean(errors) * 100)})\n    comparison = pd.DataFrame(candidates).sort_values("CV mean absolute percentage error", ignore_index=True)\n    return comparison.iloc[0].to_dict(), comparison\n\n\n'
+METRICS_CODE = 'def regression_metrics(actual, predicted):\n    mse = mean_squared_error(actual, predicted)\n    percent_error = 100 * np.abs(np.asarray(predicted) - np.asarray(actual)) / np.asarray(actual)\n    return {"MAE": mean_absolute_error(actual, predicted), "MSE": mse,\n            "RMSE": float(np.sqrt(mse)), "R²": r2_score(actual, predicted),\n            "Median absolute percentage error": float(np.median(percent_error)),\n            "Mean absolute percentage error": float(np.mean(percent_error)),\n            "Within 20 percent": int(np.count_nonzero(percent_error <= 20))}\n\n\n'
 
 
 def markdown(source):
@@ -179,7 +181,7 @@ code("""
 """)
 markdown("## Part 2 Step 1 — Regression dependencies\nThe setup cell already checks and installs scikit-learn along with the plotting and data libraries.")
 code("""
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import train_test_split, KFold
     from sklearn.linear_model import LinearRegression
     from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 """)
@@ -199,14 +201,15 @@ code("""
     data[features] = data[features].replace([np.inf, -np.inf], np.nan)
     display(data[features].head())
 """)
-markdown("## Part 2 Step 4 — Handle missing values\nDrop only rows missing On Demand, Instance Memory or vCPUs. Missing prices in unused columns do not remove a row from training.")
+markdown("## Part 2 Step 4 — Handle missing values\nDrop rows missing On Demand, Instance Memory or vCPUs, or with nonpositive target or feature values. Positive values are required for relative-error weighting. Missing prices in unused columns do not remove a row from training.")
 code("""
     data_cleaned = data.dropna(subset=["On Demand", *features]).copy()
+    data_cleaned = data_cleaned.loc[(data_cleaned["On Demand"] > 0) & (data_cleaned[features] > 0).all(axis=1)]
     print(f"Retained {len(data_cleaned)} rows; dropped {len(data) - len(data_cleaned)} rows")
     display(data_cleaned.isna().sum().rename("Missing rows").to_frame())
     assert data_cleaned[["On Demand", *features]].notna().all().all()
-    if len(data_cleaned) < 5:
-        raise ValueError("At least five complete rows are required for regression.")
+    if len(data_cleaned) < 10:
+        raise ValueError("At least ten positive complete rows are required for regression.")
 """)
 markdown("## Part 2 Step 5 — Split data into 80% training and 20% testing\nThe features contain only memory and vCPUs. The split uses the assignment's random_state=42.")
 code("""
@@ -215,6 +218,8 @@ code("""
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     print(f"Training samples: {len(X_train)}, testing samples: {len(X_test)}")
 """)
+markdown("### Choose linear-fit settings using training-only validation\nKeep memory and vCPUs as the only features. Compare weight powers 0, 1 and 2, with and without an intercept, using mean absolute percentage error. Each of the five training validation folds learns its own IQR bounds. No test prices are used to select settings. Nonnegative coefficients constrain the slopes; the intercept can still be negative.")
+code("FEATURES = features\n" + SELECTION_CODE + "\nselected, cv_results = select_linear_fit(X_train, y_train)\ndisplay(cv_results)\nprint('Selected:', selected)")
 markdown("### Filter training outliers before fitting\nCalculate the 1.5 × IQR bounds using only the training target prices. Exclude outliers from training and preserve every test row. This avoids using test data to select training rows. Expensive instances can be legitimate; the filter narrows the model's training coverage.")
 code("""
     training_rows_before = len(X_train)
@@ -237,8 +242,10 @@ code("""
 """)
 markdown("## Part 2 Step 6 — Train linear regression\nThe intercept is the fitted price at zero memory and zero CPUs; it is not an actual purchasable instance. Each coefficient describes the fitted price change per feature unit, holding the other feature constant.")
 code("""
-    model = LinearRegression()
-    model.fit(X_train, y_train)
+    original_model = LinearRegression().fit(X_train, y_train)
+    weights = (y_train.median() / y_train) ** int(selected["Weight power"])
+    model = LinearRegression(positive=True, fit_intercept=bool(selected["Fit intercept"]))
+    model.fit(X_train, y_train, sample_weight=weights)
     print(f"Intercept: {model.intercept_}")
     coefficients = pd.Series(model.coef_, index=features, name="Coefficient")
     display(coefficients.to_frame())
@@ -257,9 +264,14 @@ code("""
     predictions = data_cleaned.loc[X_test.index, ["Name", "API Name", *features]].copy()
     predictions["Actual USD/hour"] = y_test
     predictions["Predicted USD/hour"] = y_pred
+    predictions["Original fit USD/hour"] = original_model.predict(X_test)
     predictions["Residual USD/hour"] = y_test - y_pred
+    predictions["Absolute error USD/hour"] = np.abs(y_test - y_pred)
+    predictions["Absolute error percent"] = 100 * np.abs(y_test - y_pred) / y_test
     display(predictions.head(10))
 """)
+markdown("### Compare the selected fit with the original on actual held-out prices\nBoth fits use the same filtered training rows and all 169 test rows. Within 20 percent is an illustrative count, not a correctness guarantee. Inspect the actual prices and largest errors as well as averages.")
+code(METRICS_CODE + "\ncomparison_metrics = pd.DataFrame([regression_metrics(y_test, original_model.predict(X_test)), regression_metrics(y_test, y_pred)], index=['Original unweighted fit', 'Selected weighted fit'])\ndisplay(comparison_metrics)\ndisplay(predictions.sort_values('Actual USD/hour').head(10))\ndisplay(predictions.nlargest(10, 'Absolute error percent'))")
 markdown("## Part 2 Step 8 — Plot actual versus predicted prices\nThe dashed red line indicates perfect predictions. Negative model outputs are shown as fitted, rather than silently changed.")
 code("""
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -282,7 +294,7 @@ code("""
     predicted_cost = float(model.predict(new_instance)[0])
     print(f"Predicted On-Demand Cost for {new_memory_gib:g} GiB, {new_vcpus} vCPUs: ${predicted_cost:.4f}/hour")
     if predicted_cost < 0:
-        print("This negative output is not a valid price. The unconstrained model fits poorly for this configuration.")
+        print("This negative output is not a valid price. The fitted model is unsuitable for this configuration.")
     if any(new_instance[col].iloc[0] < X_train[col].min() or new_instance[col].iloc[0] > X_train[col].max() for col in features):
         print("This configuration is outside the training range; the prediction is an extrapolation.")
 """)
@@ -290,7 +302,9 @@ markdown("""
     ### Interpreting the regression
     Memory and vCPUs capture only part of the variation in EC2 pricing. The activity's
     linear model omits instance family, architecture, region and storage/network attributes.
-    Training excludes cost outliers selected using training-only IQR bounds. Evaluation
+    The selected weighted fit uses only memory and vCPUs, preserving the linear model.
+    Multiple families can share those two inputs yet have different prices, so this model
+    cannot predict a unique correct price for every instance. Training excludes cost outliers selected using training-only IQR bounds. Evaluation
     retains all test instances, so errors also measure predictions for expensive instances
     outside the retained training prices. Use the held-out errors to judge its fit. Predictions are
     educational model estimates rather than AWS quotes. A negative prediction indicates

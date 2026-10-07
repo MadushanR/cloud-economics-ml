@@ -43,6 +43,15 @@ assert changed_result["outlier_bounds"] == result["outlier_bounds"]
 assert changed_result["X_train"].index.equals(result["X_train"].index)
 assert np.allclose(changed_result["model"].coef_, result["model"].coef_)
 assert np.isclose(changed_result["model"].intercept_, result["model"].intercept_)
+assert changed_result["selection"] == result["selection"]
+assert result["metrics"]["MAE"] < result["baseline_metrics"]["MAE"]
+assert result["metrics"]["Median absolute percentage error"] < result["baseline_metrics"]["Median absolute percentage error"]
+assert result["metrics"]["Within 20 percent"] > result["baseline_metrics"]["Within 20 percent"]
+assert result["selection"]["Weight power"] == 1
+assert result["model"].predict(pd.DataFrame([[0.001, 1]], columns=FEATURES))[0] > 0
+actual_prices = data.loc[result["X_test"].index, "On Demand"]
+assert np.allclose(result["predictions"]["Actual USD/hour"], actual_prices)
+assert np.allclose(result["predictions"]["Predicted USD/hour"], result["model"].predict(result["X_test"]))
 comparison = reserved_comparison(data)
 assert comparison["On Demand"].is_monotonic_increasing
 try:
@@ -72,7 +81,7 @@ at.multiselect[0].set_value(["T2", "T3"]).run()
 at.button[0].click().run()
 assert not at.exception, str(at.exception)
 assert not any("negative price" in warning.value for warning in at.warning)
-assert any(metric.label == "Predicted Linux on-demand USD/hour" and metric.value == "$0.2355" for metric in at.metric)
+assert any(metric.label == "Predicted Linux on-demand USD/hour" and metric.value == "$0.0701" for metric in at.metric)
 at.number_input[2].set_value(100000.0)
 at.button[0].click().run()
 assert not at.exception, str(at.exception)
@@ -92,19 +101,19 @@ client = NotebookClient(notebook, km=manager, timeout=120,
                         resources={"metadata": {"path": str(root)}})
 client.execute()
 code_cells = [cell for cell in notebook.cells if cell.cell_type == "code"]
-assert len(code_cells) == 22
+assert len(code_cells) == 24
 assert all(cell.execution_count is not None for cell in code_cells)
 assert not any(output.output_type == "error" for cell in code_cells for output in cell.outputs)
 assert sum("image/png" in output.get("data", {}) for cell in code_cells for output in cell.outputs) == 4
 # Check the independent notebook and app fitted the same filtered data.
 prediction_cell = code_cells[-1]
-assert any("$0.2355/hour" in str(output.get("text", "")) for output in prediction_cell.outputs)
+assert any("$0.0701/hour" in str(output.get("text", "")) for output in prediction_cell.outputs)
 nbformat.write(notebook, "EC2_Analysis.ipynb")
 summary = {"dataset_shape": list(raw.shape), "missing_prices": data[COST_COLUMNS].isna().sum().to_dict(),
            "on_demand_outliers": 66, "training_rows": len(result["X_train"]), "test_rows": len(result["X_test"]),
            "training_outliers_removed": result["outliers_removed"], "outlier_bounds": result["outlier_bounds"],
-           "dropped_rows": 20, "metrics": result["metrics"],
+           "dropped_rows": 20, "metrics": result["metrics"], "baseline_metrics": result["baseline_metrics"], "selection": result["selection"],
            "example_prediction": float(result["model"].predict(pd.DataFrame([[4, 2]], columns=FEATURES))[0]),
            "notebook_code_cells_executed": len(code_cells), "streamlit_checks": "passed"}
 (verification / "results.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-print("All 22 notebook code cells executed successfully; saved notebook with outputs.", flush=True)
+print("All 24 notebook code cells executed successfully; saved notebook with outputs.", flush=True)

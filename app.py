@@ -133,8 +133,8 @@ with families:
     show_boxplot(chosen, "Cost distribution for selected families")
 
 with regression:
-    st.subheader("Linear regression using memory and vCPUs")
-    st.write("Rows missing the target or either feature are dropped. An 80/20 split uses random_state=42. On-demand cost outliers are then excluded from training using 1.5 × IQR bounds calculated on the training split only. The test set is kept intact.")
+    st.subheader("Weighted linear regression using memory and vCPUs")
+    st.write("Rows missing the target or either feature are dropped. An 80/20 split uses random_state=42. On-demand cost outliers are then excluded from training using 1.5 × IQR bounds calculated on the training split only. The test set is kept intact. Positive prices and capacity values are required for relative-error weighting.")
     try:
         result = train_regression(data)
     except ValueError as error:
@@ -149,13 +149,27 @@ with regression:
         training_data = result["cleaned"].loc[result["X_train"].index]
         download_csv(training_data, "Download filtered training dataset", "ec2_training_cleaned.csv", "training_cleaned")
         st.caption("Outliers can be legitimate expensive instances. Excluding them narrows the training coverage; the metrics below still evaluate every held-out test row, including expensive instances.")
+        st.write("The fit settings are selected using five-fold cross-validation within the training split. Each fold learns its own IQR bounds. The model still uses only memory and vCPUs.")
+        st.write(f"Selected weight power: {int(result['selection']['Weight power'])} · Fit intercept: {bool(result['selection']['Fit intercept'])}")
+        with st.expander("Training cross-validation results"):
+            st.dataframe(result["cv_results"], hide_index=True)
+        st.caption("Weights equal (median training price / instance price) raised to the selected power. Larger powers give lower-priced instances more influence. Nonnegative coefficients do not constrain the intercept.")
         model = result["model"]
         st.dataframe(pd.DataFrame({"Term": ["Intercept", *FEATURES], "Coefficient": [model.intercept_, *model.coef_]}), hide_index=True)
         metric_cols = st.columns(4)
-        for col, (label, value) in zip(metric_cols, result["metrics"].items()):
+        for col, (label, value) in zip(metric_cols, list(result["metrics"].items())[:4]):
             col.metric(label, f"{value:.4f}")
         st.caption("MAE and RMSE are in USD/hour. MSE is in squared USD/hour; R² is unitless. Metrics use only the held-out test set.")
+        st.subheader("Accuracy against actual held-out prices")
+        accuracy = pd.DataFrame([result["baseline_metrics"], result["metrics"]], index=["Original unweighted fit", "Selected weighted fit"])
+        st.dataframe(accuracy)
+        st.caption("Percentage errors use each instance's actual price. Within 20 percent is an illustrative count, not a guarantee of acceptable accuracy. Both fits use the same training rows and untouched test rows.")
         predictions = result["predictions"]
+        st.write(f"{result['metrics']['Within 20 percent']} of {len(predictions)} held-out predictions are within 20% of their actual prices. Median absolute percentage error: {result['metrics']['Median absolute percentage error']:.1f}%.")
+        st.write("Lowest-priced held-out instances")
+        st.dataframe(predictions.sort_values("Actual USD/hour").head(10), hide_index=True)
+        st.write("Largest percentage errors")
+        st.dataframe(predictions.nlargest(10, "Absolute error percent"), hide_index=True)
         fig, ax = plt.subplots(figsize=(8, 6))
         ax.scatter(predictions["Actual USD/hour"], predictions["Predicted USD/hour"], alpha=0.7)
         bounds = [float(predictions[["Actual USD/hour", "Predicted USD/hour"]].min().min()),
@@ -178,8 +192,13 @@ with regression:
             prediction = float(model.predict(new_instance)[0])
             st.metric("Predicted Linux on-demand USD/hour", f"${prediction:.4f}")
             if prediction < 0:
-                st.warning("The unconstrained linear model predicts a negative price for this configuration. This is not a valid price; it indicates poor model fit in this part of the data.")
+                st.warning("The fitted linear model predicts a negative price for this configuration. This is not a valid price; it indicates poor model fit in this part of the data.")
             outside = any(new_instance[col].iloc[0] < result["X_train"][col].min() or new_instance[col].iloc[0] > result["X_train"][col].max() for col in FEATURES)
             if outside:
                 st.warning("This configuration lies outside the training range for memory or vCPUs, so the estimate extrapolates beyond the training data.")
+        matching = result["cleaned"].loc[(result["cleaned"]["Instance Memory"] == memory) & (result["cleaned"]["vCPUs"] == cpus)]
+        if not matching.empty:
+            st.write(f"The dataset has {len(matching)} instances with this memory and vCPU combination, with prices from ${matching['On Demand'].min():.4f} to ${matching['On Demand'].max():.4f}/hour. A two-feature model gives all of them the same estimate.")
+            with st.expander("Actual dataset prices for this configuration"):
+                st.dataframe(matching[["API Name", "Instance Memory", "vCPUs", "On Demand"]], hide_index=True)
         st.caption("This educational model omits instance family, architecture, region and other pricing factors. Predictions describe a fitted relationship in the CSV, not an AWS price quote.")
