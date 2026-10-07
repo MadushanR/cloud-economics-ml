@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.streamlit/secrets.toml
+verification/
+.work-tmp/
+.jupyter-runtime/
+.matplotlib/
+deployment_bundle.zip
