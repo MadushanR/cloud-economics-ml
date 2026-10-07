@@ -67,6 +67,16 @@ def train_regression(data):
     X, y = cleaned[FEATURES], cleaned["On Demand"]
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42)
+    training_before = len(X_train)
+    q1, q3 = y_train.quantile([0.25, 0.75])
+    iqr = q3 - q1
+    lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    keep = y_train.between(lower, upper)
+    excluded = cleaned.loc[y_train.index[~keep]].copy()
+    X_train, y_train = X_train.loc[keep], y_train.loc[keep]
+    if len(X_train) < 2:
+        raise ValueError("Too few training rows remain after IQR outlier filtering.")
+    # Learn outlier bounds only from training targets; never filter the test set.
     model = LinearRegression().fit(X_train, y_train)
     predicted = model.predict(X_test)
     mse = mean_squared_error(y_test, predicted)
@@ -78,4 +88,8 @@ def train_regression(data):
     predictions["Residual USD/hour"] = y_test - predicted
     return {"model": model, "cleaned": cleaned, "X_train": X_train, "X_test": X_test,
             "y_train": y_train, "y_test": y_test, "predictions": predictions,
-            "metrics": metrics, "dropped": len(data) - len(cleaned)}
+            "metrics": metrics, "dropped": len(data) - len(cleaned),
+            "training_before": training_before, "training_outliers": excluded,
+            "outliers_removed": len(excluded),
+            "outlier_bounds": {"Q1": q1, "Q3": q3, "IQR": iqr,
+                               "Lower bound": lower, "Upper bound": upper}}

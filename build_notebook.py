@@ -24,7 +24,8 @@ markdown("""
 
     Part 1 explores prices, missing values, IQR outliers, reserved savings and instance
     families. Part 2 trains the specified linear regression with memory and vCPUs,
-    using an 80/20 split and `random_state=42`.
+    using an 80/20 split and `random_state=42`. As requested, on-demand cost outliers
+    are excluded from training with training-only 1.5 × IQR bounds. The test set remains intact.
 
     All prices describe the supplied dataset. Its AWS region, capture date and reservation
     terms are unspecified. Missing prices remain missing, rather than being treated as zero.
@@ -214,6 +215,26 @@ code("""
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     print(f"Training samples: {len(X_train)}, testing samples: {len(X_test)}")
 """)
+markdown("### Filter training outliers before fitting\nCalculate the 1.5 × IQR bounds using only the training target prices. Exclude outliers from training and preserve every test row. This avoids using test data to select training rows. Expensive instances can be legitimate; the filter narrows the model's training coverage.")
+code("""
+    training_rows_before = len(X_train)
+    train_q1, train_q3 = y_train.quantile([0.25, 0.75])
+    train_iqr = train_q3 - train_q1
+    train_lower = train_q1 - 1.5 * train_iqr
+    train_upper = train_q3 + 1.5 * train_iqr
+    training_inliers = y_train.between(train_lower, train_upper)
+    excluded_training_outliers = data_cleaned.loc[y_train.index[~training_inliers]].copy()
+    X_train = X_train.loc[training_inliers]
+    y_train = y_train.loc[training_inliers]
+    if len(X_train) < 2:
+        raise ValueError("Too few training rows remain after outlier filtering.")
+    print(f"Training IQR bounds: {train_lower:.6f} to {train_upper:.6f} USD/hour")
+    print(f"Training rows: {training_rows_before} before filtering, {len(X_train)} retained, {len(excluded_training_outliers)} excluded")
+    print(f"Test rows unchanged: {len(X_test)}")
+    display(excluded_training_outliers)
+    filtered_training_data = data_cleaned.loc[X_train.index].copy()
+    display(filtered_training_data.head())
+""")
 markdown("## Part 2 Step 6 — Train linear regression\nThe intercept is the fitted price at zero memory and zero CPUs; it is not an actual purchasable instance. Each coefficient describes the fitted price change per feature unit, holding the other feature constant.")
 code("""
     model = LinearRegression()
@@ -269,7 +290,9 @@ markdown("""
     ### Interpreting the regression
     Memory and vCPUs capture only part of the variation in EC2 pricing. The activity's
     linear model omits instance family, architecture, region and storage/network attributes.
-    Use the held-out errors to judge how closely it fits this dataset. Predictions are
+    Training excludes cost outliers selected using training-only IQR bounds. Evaluation
+    retains all test instances, so errors also measure predictions for expensive instances
+    outside the retained training prices. Use the held-out errors to judge its fit. Predictions are
     educational model estimates rather than AWS quotes. A negative prediction indicates
     that the fitted relationship is unsuitable for that configuration.
 """)

@@ -27,10 +27,22 @@ assert len(detect_outliers(data)[0]) == 66
 assert len(filter_instance_family(data, "T2")) == 7
 assert len(filter_instance_family(data, "T3")) == 14
 result = train_regression(data)
-assert (len(result["X_train"]), len(result["X_test"]), result["dropped"]) == (672, 169, 20)
+assert (len(result["X_train"]), len(result["X_test"]), result["dropped"]) == (621, 169, 20)
 assert not set(result["X_train"].index) & set(result["X_test"].index)
 assert np.isfinite(list(result["metrics"].values())).all()
 assert list(result["model"].feature_names_in_) == FEATURES
+assert result["training_before"] == 672 and result["outliers_removed"] == 51
+assert not set(result["training_outliers"].index) & set(result["X_test"].index)
+assert result["y_train"].between(result["outlier_bounds"]["Lower bound"], result["outlier_bounds"]["Upper bound"]).all()
+assert float(result["model"].predict(pd.DataFrame([[4, 2]], columns=FEATURES))[0]) > 0
+# Changing only held-out targets must not change training bounds, rows or fit.
+changed_test = data.copy()
+changed_test.loc[result["X_test"].index, "On Demand"] = 1000000.0
+changed_result = train_regression(changed_test)
+assert changed_result["outlier_bounds"] == result["outlier_bounds"]
+assert changed_result["X_train"].index.equals(result["X_train"].index)
+assert np.allclose(changed_result["model"].coef_, result["model"].coef_)
+assert np.isclose(changed_result["model"].intercept_, result["model"].intercept_)
 comparison = reserved_comparison(data)
 assert comparison["On Demand"].is_monotonic_increasing
 try:
@@ -59,7 +71,8 @@ print("Streamlit empty family selection passed.", flush=True)
 at.multiselect[0].set_value(["T2", "T3"]).run()
 at.button[0].click().run()
 assert not at.exception, str(at.exception)
-assert any("negative price" in warning.value for warning in at.warning)
+assert not any("negative price" in warning.value for warning in at.warning)
+assert any(metric.label == "Predicted Linux on-demand USD/hour" and metric.value == "$0.2355" for metric in at.metric)
 at.number_input[2].set_value(100000.0)
 at.button[0].click().run()
 assert not at.exception, str(at.exception)
@@ -79,15 +92,19 @@ client = NotebookClient(notebook, km=manager, timeout=120,
                         resources={"metadata": {"path": str(root)}})
 client.execute()
 code_cells = [cell for cell in notebook.cells if cell.cell_type == "code"]
-assert len(code_cells) == 21
+assert len(code_cells) == 22
 assert all(cell.execution_count is not None for cell in code_cells)
 assert not any(output.output_type == "error" for cell in code_cells for output in cell.outputs)
 assert sum("image/png" in output.get("data", {}) for cell in code_cells for output in cell.outputs) == 4
+# Check the independent notebook and app fitted the same filtered data.
+prediction_cell = code_cells[-1]
+assert any("$0.2355/hour" in str(output.get("text", "")) for output in prediction_cell.outputs)
 nbformat.write(notebook, "EC2_Analysis.ipynb")
 summary = {"dataset_shape": list(raw.shape), "missing_prices": data[COST_COLUMNS].isna().sum().to_dict(),
-           "on_demand_outliers": 66, "training_rows": 672, "test_rows": 169,
+           "on_demand_outliers": 66, "training_rows": len(result["X_train"]), "test_rows": len(result["X_test"]),
+           "training_outliers_removed": result["outliers_removed"], "outlier_bounds": result["outlier_bounds"],
            "dropped_rows": 20, "metrics": result["metrics"],
            "example_prediction": float(result["model"].predict(pd.DataFrame([[4, 2]], columns=FEATURES))[0]),
            "notebook_code_cells_executed": len(code_cells), "streamlit_checks": "passed"}
 (verification / "results.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-print("All 21 notebook code cells executed successfully; saved notebook with outputs.", flush=True)
+print("All 22 notebook code cells executed successfully; saved notebook with outputs.", flush=True)

@@ -134,13 +134,21 @@ with families:
 
 with regression:
     st.subheader("Linear regression using memory and vCPUs")
-    st.write("Rows missing the target or either feature are dropped. The remaining rows are split into 80% training and 20% testing with random_state=42, as specified in the activity.")
+    st.write("Rows missing the target or either feature are dropped. An 80/20 split uses random_state=42. On-demand cost outliers are then excluded from training using 1.5 × IQR bounds calculated on the training split only. The test set is kept intact.")
     try:
         result = train_regression(data)
     except ValueError as error:
         st.warning(str(error))
     else:
         st.write(f"Training: {len(result['X_train'])} rows · Testing: {len(result['X_test'])} rows · Dropped: {result['dropped']} rows")
+        st.write(f"Training rows before filtering: {result['training_before']} · Training outliers excluded: {result['outliers_removed']}")
+        with st.expander("Training outlier bounds and excluded instances"):
+            st.dataframe(pd.Series(result["outlier_bounds"], name="USD/hour").to_frame())
+            st.dataframe(result["training_outliers"], hide_index=True)
+        download_csv(result["training_outliers"], "Download excluded training outliers", "ec2_training_outliers.csv", "training_outliers")
+        training_data = result["cleaned"].loc[result["X_train"].index]
+        download_csv(training_data, "Download filtered training dataset", "ec2_training_cleaned.csv", "training_cleaned")
+        st.caption("Outliers can be legitimate expensive instances. Excluding them narrows the training coverage; the metrics below still evaluate every held-out test row, including expensive instances.")
         model = result["model"]
         st.dataframe(pd.DataFrame({"Term": ["Intercept", *FEATURES], "Coefficient": [model.intercept_, *model.coef_]}), hide_index=True)
         metric_cols = st.columns(4)

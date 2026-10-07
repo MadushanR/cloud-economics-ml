@@ -53,7 +53,7 @@ For JupyterLab:
 .\.venv\Scripts\python.exe -m jupyterlab EC2_Analysis.ipynb
 ```
 
-Select a Python kernel from this project's environment and run cells with **Shift+Enter**. The notebook has 21 code cells and does not import the app or its helper module. Keep `ec2dataset.csv` beside it, or edit `file_path` in the loading cell. The first cell installs any missing analysis libraries in the active kernel environment.
+Select a Python kernel from this project's environment and run cells with **Shift+Enter**. The notebook has 22 code cells and does not import the app or its helper module. Keep `ec2dataset.csv` beside it, or edit `file_path` in the loading cell. The first cell installs any missing analysis libraries in the active kernel environment.
 
 On a different computer, install Python 3.14, create a virtual environment, and install `requirements-notebook.txt` before launching JupyterLab. For the app alone, install `requirements.txt`.
 
@@ -69,7 +69,7 @@ On a different computer, install Python 3.14, create a virtual environment, and 
 | Part 1 Step 6 IQR outliers | Costs and outliers tab | On-demand IQR bounds and rows |
 | Part 1 Step 7 Conclusions, reserved savings and workload costs | Costs and outliers tab | Matched comparison, savings, workload filtering and conclusions |
 | Part 1 Step 8 T2/T3 summaries, boxplots and comparisons | Instance families tab | Prefix filters, both boxplots and combined comparison |
-| Part 2 Steps 1–4 Dependencies, cost cleaning, features, missing rows | Regression and prediction tab | Separate preparation cells |
+| Part 2 Steps 1–4 Dependencies, cost cleaning, features, missing rows | Regression and prediction tab | Separate preparation cells and training-only IQR outlier removal |
 | Part 2 Step 5 80/20 split with seed 42 | Regression and prediction tab | `train_test_split` cell |
 | Part 2 Step 6 Linear regression, coefficients and intercept | Regression and prediction tab | Training and coefficient cell |
 | Part 2 Step 7 MAE, MSE and RMSE | Regression and prediction tab | Held-out evaluation cell |
@@ -82,4 +82,4 @@ The activity's `Name.startswith('T3')` filter includes T3A. Both deliverables pr
 
 Prices are historical values from the supplied CSV. The dataset does not specify its region, capture date or reservation terms. Missing prices remain missing. IQR flags indicate statistical outliers rather than confirmed data errors.
 
-The required regression uses only memory and vCPUs. It excludes instance family, architecture and other pricing factors. Its negative estimate for the activity's 4 GiB, 2 vCPU example is displayed and explained rather than changed. It is not a valid AWS price. Neither fitted estimates nor the capacity-based cheapest-instance table establish actual workload performance.
+The required regression uses only memory and vCPUs. It excludes instance family, architecture and other pricing factors. The model excludes on-demand cost outliers from training using the 1.5 × IQR rule, with bounds calculated from the training targets only after the 80/20 split. For the supplied CSV, 51 of 672 training rows are excluded and 621 remain. All 169 test rows are retained. The 4 GiB, 2 vCPU example predicts approximately $0.2355/hour. Filtering narrows the training coverage and does not guarantee lower errors on the full test set or nonnegative predictions for every possible configuration. Negative outputs, if any, are flagged as invalid prices. Neither fitted estimates nor the capacity-based cheapest-instance table establish actual workload performance.
